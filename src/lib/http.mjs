@@ -25,6 +25,7 @@ export async function fetchText(url, { retries = 3 } = {}) {
           },
         });
         if (res.status === 429 || res.status === 503) {
+          lastErr = new Error(`HTTP ${res.status} for ${url} (attempt ${i + 1}/${retries + 1})`);
           await delay(6000 + 4000 * i);
           continue;
         }
@@ -38,5 +39,7 @@ export async function fetchText(url, { retries = 3 } = {}) {
       await delay(1500 + 1500 * i);
     }
   }
-  throw lastErr;
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error(lastErr ? String(lastErr) : `Request failed after retries: ${url}`);
 }
