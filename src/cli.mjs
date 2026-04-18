@@ -27,9 +27,22 @@ function hasFlag(name) {
 async function scrape() {
   const log = console.log;
   const outPath = argValue('--out') || join(ROOT, 'output', 'wnba-players-ingest.json');
-  const limit = process.env.SCRAPE_LIMIT ? parseInt(process.env.SCRAPE_LIMIT, 10) : null;
   const limitArg = argValue('--limit');
-  const maxPlayers = limitArg ? parseInt(limitArg, 10) : Number.isFinite(limit) ? limit : null;
+  const limitFromEnv = process.env.SCRAPE_LIMIT ? parseInt(process.env.SCRAPE_LIMIT, 10) : null;
+
+  // `npm start` / Railway: full a–z discovery + all players. `--fast` = main index only (dev).
+  if (hasFlag('--fast')) {
+    process.env.FAST_DISCOVER = '1';
+  } else {
+    delete process.env.FAST_DISCOVER;
+    delete process.env.SCRAPE_LIMIT;
+  }
+
+  const maxPlayers = limitArg
+    ? parseInt(limitArg, 10)
+    : Number.isFinite(limitFromEnv)
+      ? limitFromEnv
+      : null;
 
   const ids = await discoverAllPlayerIds(log);
   log(`Discovered ${ids.length} player pages.`);
@@ -119,8 +132,10 @@ if (cmd === 'scrape') await scrape();
 else if (cmd === 'ingest') await ingest();
 else {
   console.log(`Usage:
-  node src/cli.mjs scrape [--limit N] [--out path.json] [--concurrency 1-12]
+  node src/cli.mjs scrape [--limit N] [--out path.json] [--concurrency 1-12] [--fast]
   node src/cli.mjs ingest [--file path.json]
+
+  --fast  use FAST_DISCOVER=1-style short index (dev only; omitted on npm start)
 `);
   process.exit(1);
 }
