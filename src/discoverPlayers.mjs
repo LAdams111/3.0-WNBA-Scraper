@@ -1,6 +1,5 @@
 import { load } from 'cheerio';
 import { BBR_BASE, WNBA_PLAYERS_INDEX } from './lib/constants.mjs';
-import { discoverConcurrency } from './lib/concurrency.mjs';
 import { fetchText, delayBetweenRequests } from './lib/http.mjs';
 
 const PLAYER_PATH = /^\/wnba\/players\/[a-z]\/([a-z0-9]+)\.html$/;
@@ -20,7 +19,6 @@ export async function discoverAllPlayerIds(log = console.log) {
   const ids = new Set();
   log('Fetching WNBA player directory…');
   const indexHtml = await fetchText(WNBA_PLAYERS_INDEX);
-  await delayBetweenRequests();
   for (const id of extractIds(indexHtml)) ids.add(id);
 
   if (process.env.FAST_DISCOVER === '1') {
@@ -29,26 +27,20 @@ export async function discoverAllPlayerIds(log = console.log) {
   }
 
   const letters = 'abcdefghijklmnopqrstuvwxyz';
-  const disc = discoverConcurrency();
-  log(`Fetching ${letters.length} letter index pages (${disc} at a time)…`);
   const letterUrls = [...letters].map((l) => `${BBR_BASE}/wnba/players/${l}/`);
-  for (let i = 0; i < letterUrls.length; i += disc) {
-    const chunk = letterUrls.slice(i, i + disc);
-    const chunkLetters = [...letters].slice(i, i + disc);
-    const settled = await Promise.allSettled(chunk.map((url) => fetchText(url)));
-    const sizeBefore = ids.size;
-    settled.forEach((out, j) => {
-      const letter = chunkLetters[j];
-      if (out.status === 'rejected') {
-        log(`  Letter ${letter}: skip (${out.reason?.message || out.reason})`);
-        return;
-      }
-      for (const id of extractIds(out.value)) ids.add(id);
-    });
-    const addedChunk = ids.size - sizeBefore;
-    log(`  Letters ${chunkLetters[0]}–${chunkLetters[chunkLetters.length - 1]}: +${addedChunk} new (total ${ids.size})`);
-    await delayBetweenRequests();
-  }
+  log(`Fetching ${letters.length} letter index pages in parallel…`);
+  const settled = await Promise.allSettled(letterUrls.map((url) => fetchText(url)));
+  const sizeBefore = ids.size;
+  settled.forEach((out, j) => {
+    const letter = letters[j];
+    if (out.status === 'rejected') {
+      log(`  Letter ${letter}: skip (${out.reason?.message || out.reason})`);
+      return;
+    }
+    for (const id of extractIds(out.value)) ids.add(id);
+  });
+  log(`  Letters a–z: +${ids.size - sizeBefore} new (total ${ids.size})`);
+  await delayBetweenRequests();
 
   return [...ids].sort();
 }

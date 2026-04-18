@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 
 import { discoverAllPlayerIds, playerUrlForId } from './discoverPlayers.mjs';
 import { playerConcurrency } from './lib/concurrency.mjs';
-import { fetchText } from './lib/http.mjs';
+import { fetchText, pooledFetch } from './lib/http.mjs';
 import { poolMap } from './lib/pool.mjs';
 import { parsePlayerHtml } from './parsePlayerPage.mjs';
 import { toHoopCentralPlayer } from './mapToIngest.mjs';
@@ -52,7 +52,7 @@ async function scrape() {
 
   const concArg = argValue('--concurrency');
   const conc = concArg
-    ? Math.max(1, Math.min(16, parseInt(concArg, 10)))
+    ? Math.max(1, Math.min(48, parseInt(concArg, 10)))
     : playerConcurrency();
   const logEveryRaw = parseInt(process.env.SCRAPING_LOG_EVERY || '5', 10);
   const logEvery = Number.isFinite(logEveryRaw) && logEveryRaw > 0 ? Math.min(100, logEveryRaw) : 5;
@@ -123,17 +123,17 @@ async function ingest() {
   for (let i = 0; i < players.length; i += chunkSize) {
     chunks.push(players.slice(i, i + chunkSize));
   }
-  const ingestConcRaw = parseInt(process.env.INGEST_CONCURRENCY || '4', 10);
+  const ingestConcRaw = parseInt(process.env.INGEST_CONCURRENCY || '6', 10);
   const ingestConc = Math.min(
-    6,
-    Math.max(1, Number.isFinite(ingestConcRaw) ? ingestConcRaw : 4),
+    10,
+    Math.max(1, Number.isFinite(ingestConcRaw) ? ingestConcRaw : 6),
     chunks.length
   );
   console.log(
     `Ingesting ${players.length} players in ${chunks.length} batch(es), up to ${ingestConc} parallel POSTs…`
   );
   const batchResults = await poolMap(chunks, ingestConc, async (batch, bi) => {
-    const res = await fetch(url, {
+    const res = await pooledFetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -160,7 +160,7 @@ if (cmd === 'scrape') await scrape();
 else if (cmd === 'ingest') await ingest();
 else {
   console.log(`Usage:
-  node src/cli.mjs scrape [--limit N] [--out path.json] [--concurrency 1-16] [--fast]
+  node src/cli.mjs scrape [--limit N] [--out path.json] [--concurrency 1-48] [--fast]
   node src/cli.mjs ingest [--file path.json]
 
   --fast  use FAST_DISCOVER=1-style short index (dev only; omitted on npm start)
