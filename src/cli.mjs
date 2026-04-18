@@ -52,11 +52,14 @@ async function scrape() {
 
   const concArg = argValue('--concurrency');
   const conc = concArg
-    ? Math.max(1, Math.min(12, parseInt(concArg, 10)))
+    ? Math.max(1, Math.min(16, parseInt(concArg, 10)))
     : playerConcurrency();
-  log(`Fetching player pages with concurrency=${conc} (set CONCURRENCY or --concurrency).`);
+  const logEveryRaw = parseInt(process.env.SCRAPING_LOG_EVERY || '5', 10);
+  const logEvery = Number.isFinite(logEveryRaw) && logEveryRaw > 0 ? Math.min(100, logEveryRaw) : 5;
+
+  log(`Fetching player pages with concurrency=${conc} (set CONCURRENCY or --concurrency on Railway).`);
   log(
-    `Downloading ${slice.length} player pages — logs every 20 completions (this phase can take many minutes).`
+    `Downloading ${slice.length} player pages in parallel — progress lines are "${logEvery} of ${slice.length} done", not "only N players".`
   );
 
   let done = 0;
@@ -67,7 +70,7 @@ async function scrape() {
     const parsed = parsePlayerHtml(html, url);
     const row = toHoopCentralPlayer(parsed, id);
     done++;
-    if (done === 1 || done % 20 === 0 || done === slice.length) {
+    if (done === 1 || done % logEvery === 0 || done === slice.length) {
       const sec = ((Date.now() - t0) / 1000).toFixed(0);
       log(`  [${done}/${slice.length}] ${row.name} (${sec}s)`);
     }
@@ -157,7 +160,7 @@ if (cmd === 'scrape') await scrape();
 else if (cmd === 'ingest') await ingest();
 else {
   console.log(`Usage:
-  node src/cli.mjs scrape [--limit N] [--out path.json] [--concurrency 1-12] [--fast]
+  node src/cli.mjs scrape [--limit N] [--out path.json] [--concurrency 1-16] [--fast]
   node src/cli.mjs ingest [--file path.json]
 
   --fast  use FAST_DISCOVER=1-style short index (dev only; omitted on npm start)

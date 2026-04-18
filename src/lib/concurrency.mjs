@@ -5,9 +5,9 @@ function intEnv(name, fallback) {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-/** Parallel player page fetches (1–12). Tune down if Basketball Reference returns 429. */
+/** Parallel Basketball Reference player page fetches (1–16). Lower CONCURRENCY if BR returns 429. */
 export function playerConcurrency() {
-  return Math.min(12, Math.max(1, intEnv('CONCURRENCY', 8)));
+  return Math.min(16, Math.max(1, intEnv('CONCURRENCY', 12)));
 }
 
 /** Parallel letter-directory fetches during discovery. */
