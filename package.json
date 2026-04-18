@@ -7,9 +7,9 @@
     "node": ">=18"
   },
   "scripts": {
-    "scrape": "node src/cli.mjs scrape",
-    "ingest": "node src/cli.mjs ingest",
-    "start": "node src/cli.mjs scrape && node src/cli.mjs ingest"
+    "scrape": "node --import ./src/node18-polyfill.mjs src/cli.mjs scrape",
+    "ingest": "node --import ./src/node18-polyfill.mjs src/cli.mjs ingest",
+    "start": "node --import ./src/node18-polyfill.mjs src/cli.mjs scrape && node --import ./src/node18-polyfill.mjs src/cli.mjs ingest"
   },
   "dependencies": {
     "cheerio": "^1.0.0",
