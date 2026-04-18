@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import 'dotenv/config';
+import { writeSync } from 'fs';
 import { mkdir, writeFile } from 'fs/promises';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -52,29 +53,47 @@ async function scrape() {
 
   const concArg = argValue('--concurrency');
   const conc = concArg
-    ? Math.max(1, Math.min(48, parseInt(concArg, 10)))
+    ? Math.max(1, Math.min(32, parseInt(concArg, 10)))
     : playerConcurrency();
-  const logEveryRaw = parseInt(process.env.SCRAPING_LOG_EVERY || '5', 10);
-  const logEvery = Number.isFinite(logEveryRaw) && logEveryRaw > 0 ? Math.min(100, logEveryRaw) : 5;
+  const logEveryRaw = parseInt(process.env.SCRAPING_LOG_EVERY || '1', 10);
+  const logEvery = Number.isFinite(logEveryRaw) && logEveryRaw > 0 ? Math.min(200, logEveryRaw) : 1;
 
-  log(`Fetching player pages with concurrency=${conc} (set CONCURRENCY or --concurrency on Railway).`);
-  log(
-    `Downloading ${slice.length} player pages in parallel — progress lines are "${logEvery} of ${slice.length} done", not "only N players".`
+  function flushLine(line) {
+    try {
+      writeSync(1, `${line}\n`);
+    } catch {
+      log(line);
+    }
+  }
+
+  log(`Fetching player pages with concurrency=${conc} (set CONCURRENCY on Railway).`);
+  flushLine(
+    `Each line below = one player page finished (ok or error). [n/total] is how many have finished, not "only n in DB".`
   );
 
-  let done = 0;
+  let finished = 0;
   const t0 = Date.now();
   const raw = await poolMap(slice, conc, async (id) => {
-    const url = playerUrlForId(id);
-    const html = await fetchText(url);
-    const parsed = parsePlayerHtml(html, url);
-    const row = toHoopCentralPlayer(parsed, id);
-    done++;
-    if (done === 1 || done % logEvery === 0 || done === slice.length) {
-      const sec = ((Date.now() - t0) / 1000).toFixed(0);
-      log(`  [${done}/${slice.length}] ${row.name} (${sec}s)`);
+    let label = id;
+    try {
+      const url = playerUrlForId(id);
+      const html = await fetchText(url);
+      const parsed = parsePlayerHtml(html, url);
+      const row = toHoopCentralPlayer(parsed, id);
+      label = row.name;
+      return { id, url, row };
+    } catch (e) {
+      label = `ERROR ${e.message}`;
+      throw e;
+    } finally {
+      finished++;
+      const sec = ((Date.now() - t0) / 1000).toFixed(1);
+      const isErr = String(label).startsWith('ERROR');
+      const line = `  [${finished}/${slice.length}] ${label} (${sec}s)`;
+      if (isErr || finished % logEvery === 0 || finished === slice.length) {
+        flushLine(line);
+      }
     }
-    return { id, url, row };
   });
 
   const players = [];
@@ -85,7 +104,6 @@ async function scrape() {
     const url = playerUrlForId(id);
     if (!slot.ok) {
       errors.push({ id, url, message: slot.error?.message || String(slot.error) });
-      log(`  [${i + 1}/${slice.length}] ERROR ${id}: ${errors[errors.length - 1].message}`);
       continue;
     }
     players.push(slot.value.row);
@@ -160,7 +178,7 @@ if (cmd === 'scrape') await scrape();
 else if (cmd === 'ingest') await ingest();
 else {
   console.log(`Usage:
-  node src/cli.mjs scrape [--limit N] [--out path.json] [--concurrency 1-48] [--fast]
+  node src/cli.mjs scrape [--limit N] [--out path.json] [--concurrency 1-32] [--fast]
   node src/cli.mjs ingest [--file path.json]
 
   --fast  use FAST_DISCOVER=1-style short index (dev only; omitted on npm start)
