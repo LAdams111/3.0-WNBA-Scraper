@@ -80,6 +80,10 @@ async function scrape() {
     0,
     parseInt(process.env.SCRAPER_ROUND_PAUSE_MS || '1500', 10) || 0
   );
+  const heartbeatMs = Math.max(
+    3000,
+    parseInt(process.env.SCRAPER_HEARTBEAT_MS || '12000', 10) || 12000
+  );
 
   const playersById = new Map();
   let pending = [...slice];
@@ -89,17 +93,39 @@ async function scrape() {
 
   while (pending.length > 0) {
     round++;
-    log(
-      `\nScrape round ${round}: ${pending.length} pending, ${playersById.size}/${slice.length} succeeded.`
+    flushLine('');
+    flushLine(
+      `Scrape round ${round}: ${pending.length} pending, ${playersById.size}/${slice.length} succeeded (all-time).`
+    );
+    flushLine(
+      `  Player lines appear only after each page finishes; 429 retries can take 1–3+ min before the first line.`
     );
 
-    const raw = await poolMap(pending, conc, async (id) => {
-      const url = playerUrlForId(id);
-      const html = await fetchText(url);
-      const parsed = parsePlayerHtml(html, url);
-      const row = toHoopCentralPlayer(parsed, id);
-      return { id, url, row };
-    });
+    const wave = { started: 0, finished: 0 };
+    const hb = setInterval(() => {
+      const elapsed = Math.round((Date.now() - t0) / 1000);
+      flushLine(
+        `  …heartbeat ${elapsed}s: round ${round} batch ${wave.finished}/${pending.length} pages done (${wave.started} started, concurrency ${conc})`
+      );
+    }, heartbeatMs);
+
+    let raw;
+    try {
+      raw = await poolMap(pending, conc, async (id) => {
+        wave.started++;
+        try {
+          const url = playerUrlForId(id);
+          const html = await fetchText(url);
+          const parsed = parsePlayerHtml(html, url);
+          const row = toHoopCentralPlayer(parsed, id);
+          return { id, url, row };
+        } finally {
+          wave.finished++;
+        }
+      });
+    } finally {
+      clearInterval(hb);
+    }
 
     const nextPending = [];
     for (let i = 0; i < raw.length; i++) {
