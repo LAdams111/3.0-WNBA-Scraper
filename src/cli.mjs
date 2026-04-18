@@ -53,7 +53,7 @@ async function scrape() {
 
   const concArg = argValue('--concurrency');
   const conc = concArg
-    ? Math.max(1, Math.min(32, parseInt(concArg, 10)))
+    ? Math.max(1, Math.min(16, parseInt(concArg, 10)))
     : playerConcurrency();
   const logEveryRaw = parseInt(process.env.SCRAPING_LOG_EVERY || '1', 10);
   const logEvery = Number.isFinite(logEveryRaw) && logEveryRaw > 0 ? Math.min(200, logEveryRaw) : 1;
@@ -178,7 +178,7 @@ if (cmd === 'scrape') await scrape();
 else if (cmd === 'ingest') await ingest();
 else {
   console.log(`Usage:
-  node src/cli.mjs scrape [--limit N] [--out path.json] [--concurrency 1-32] [--fast]
+  node src/cli.mjs scrape [--limit N] [--out path.json] [--concurrency 1-16] [--fast]
   node src/cli.mjs ingest [--file path.json]
 
   --fast  use FAST_DISCOVER=1-style short index (dev only; omitted on npm start)

@@ -28,17 +28,17 @@ export async function discoverAllPlayerIds(log = console.log) {
 
   const letters = 'abcdefghijklmnopqrstuvwxyz';
   const letterUrls = [...letters].map((l) => `${BBR_BASE}/wnba/players/${l}/`);
-  log(`Fetching ${letters.length} letter index pages in parallel…`);
-  const settled = await Promise.allSettled(letterUrls.map((url) => fetchText(url)));
+  log(`Fetching ${letters.length} letter index pages sequentially (avoids BR 429 bursts)…`);
   const sizeBefore = ids.size;
-  settled.forEach((out, j) => {
+  for (let j = 0; j < letterUrls.length; j++) {
     const letter = letters[j];
-    if (out.status === 'rejected') {
-      log(`  Letter ${letter}: skip (${out.reason?.message || out.reason})`);
-      return;
+    try {
+      const html = await fetchText(letterUrls[j]);
+      for (const id of extractIds(html)) ids.add(id);
+    } catch (e) {
+      log(`  Letter ${letter}: skip (${e?.message || e})`);
     }
-    for (const id of extractIds(out.value)) ids.add(id);
-  });
+  }
   log(`  Letters a–z: +${ids.size - sizeBefore} new (total ${ids.size})`);
   await delayBetweenRequests();
 
