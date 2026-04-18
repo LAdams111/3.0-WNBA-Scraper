@@ -5,7 +5,7 @@ function intEnv(name, fallback) {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-/** Parallel BR fetches (1–16). Default 2; spacing is enforced globally in http.mjs (BR_MIN_INTERVAL_MS). */
+/** Parallel BR fetches (1–16). Default 4 with adaptive spacing in http.mjs. */
 export function playerConcurrency() {
-  return Math.min(16, Math.max(1, intEnv('CONCURRENCY', 2)));
+  return Math.min(16, Math.max(1, intEnv('CONCURRENCY', 4)));
 }
