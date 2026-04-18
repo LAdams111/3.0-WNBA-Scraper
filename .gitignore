@@ -205,3 +205,10 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Node (WNBA scraper)
+node_modules/
+output/
+.env
+# Python template above ignores `lib/` globally; allow scraper helpers.
+!src/lib/

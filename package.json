@@ -1,0 +1,17 @@
+{
+  "name": "wnba-bbr-scraper",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "scrape": "node src/cli.mjs scrape",
+    "ingest": "node src/cli.mjs ingest"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "dotenv": "^16.4.5"
+  }
+}
