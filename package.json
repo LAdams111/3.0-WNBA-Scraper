@@ -8,7 +8,8 @@
   },
   "scripts": {
     "scrape": "node src/cli.mjs scrape",
-    "ingest": "node src/cli.mjs ingest"
+    "ingest": "node src/cli.mjs ingest",
+    "start": "node src/cli.mjs scrape && node src/cli.mjs ingest"
   },
   "dependencies": {
     "cheerio": "^1.0.0",
