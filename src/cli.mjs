@@ -112,7 +112,10 @@ async function ingest() {
   const { players } = JSON.parse(raw);
   if (!Array.isArray(players)) throw new Error('Invalid JSON: expected { players: [] }');
 
-  const chunkSize = 500;
+  const chunkSize = Math.max(
+    1,
+    parseInt(process.env.INGEST_CHUNK_SIZE || String(players.length), 10) || players.length
+  );
   const chunks = [];
   for (let i = 0; i < players.length; i += chunkSize) {
     chunks.push(players.slice(i, i + chunkSize));
