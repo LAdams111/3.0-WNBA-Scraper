@@ -113,8 +113,20 @@ async function ingest() {
   if (!Array.isArray(players)) throw new Error('Invalid JSON: expected { players: [] }');
 
   const chunkSize = 500;
+  const chunks = [];
   for (let i = 0; i < players.length; i += chunkSize) {
-    const batch = players.slice(i, i + chunkSize);
+    chunks.push(players.slice(i, i + chunkSize));
+  }
+  const ingestConcRaw = parseInt(process.env.INGEST_CONCURRENCY || '4', 10);
+  const ingestConc = Math.min(
+    6,
+    Math.max(1, Number.isFinite(ingestConcRaw) ? ingestConcRaw : 4),
+    chunks.length
+  );
+  console.log(
+    `Ingesting ${players.length} players in ${chunks.length} batch(es), up to ${ingestConc} parallel POSTs…`
+  );
+  const batchResults = await poolMap(chunks, ingestConc, async (batch, bi) => {
     const res = await fetch(url, {
       method: 'POST',
       headers: {
@@ -124,11 +136,15 @@ async function ingest() {
       body: JSON.stringify({ players: batch }),
     });
     const text = await res.text();
-    if (!res.ok) {
-      console.error(`Batch ${i / chunkSize + 1} failed: ${res.status}`, text);
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
+    return { bi, text };
+  });
+  for (const slot of batchResults) {
+    if (!slot.ok) {
+      console.error('Ingest batch failed:', slot.error?.message || slot.error);
       process.exit(1);
     }
-    console.log(`Batch ${i / chunkSize + 1}:`, text);
+    console.log(`Batch ${slot.value.bi + 1}:`, slot.value.text);
   }
   console.log('Ingest complete.');
 }
