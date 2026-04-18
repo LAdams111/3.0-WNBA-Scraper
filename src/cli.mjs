@@ -25,6 +25,11 @@ function hasFlag(name) {
   return process.argv.includes(name);
 }
 
+function isTerminalScrapeError(err) {
+  const msg = err?.message || String(err);
+  return /HTTP 404\b/.test(msg) || /HTTP 410\b/.test(msg);
+}
+
 async function scrape() {
   const log = console.log;
   const outPath = argValue('--out') || join(ROOT, 'output', 'wnba-players-ingest.json');
@@ -68,46 +73,76 @@ async function scrape() {
 
   log(`Fetching player pages with concurrency=${conc} (set CONCURRENCY on Railway).`);
   flushLine(
-    `Each line below = one player page finished (ok or error). [n/total] is how many have finished, not "only n in DB".`
+    `[n/total] counts only successful scrapes. Retryable failures are retried until ok (nothing skipped).`
   );
 
-  let finished = 0;
+  const roundPauseMs = Math.max(
+    0,
+    parseInt(process.env.SCRAPER_ROUND_PAUSE_MS || '1500', 10) || 0
+  );
+
+  const playersById = new Map();
+  let pending = [...slice];
   const t0 = Date.now();
-  const raw = await poolMap(slice, conc, async (id) => {
-    let label = id;
-    try {
+  let round = 0;
+  let attemptSeq = 0;
+
+  while (pending.length > 0) {
+    round++;
+    log(
+      `\nScrape round ${round}: ${pending.length} pending, ${playersById.size}/${slice.length} succeeded.`
+    );
+
+    const raw = await poolMap(pending, conc, async (id) => {
       const url = playerUrlForId(id);
       const html = await fetchText(url);
       const parsed = parsePlayerHtml(html, url);
       const row = toHoopCentralPlayer(parsed, id);
-      label = row.name;
       return { id, url, row };
-    } catch (e) {
-      label = `ERROR ${e.message}`;
-      throw e;
-    } finally {
-      finished++;
-      const sec = ((Date.now() - t0) / 1000).toFixed(1);
-      const isErr = String(label).startsWith('ERROR');
-      const line = `  [${finished}/${slice.length}] ${label} (${sec}s)`;
-      if (isErr || finished % logEvery === 0 || finished === slice.length) {
-        flushLine(line);
-      }
-    }
-  });
+    });
 
-  const players = [];
-  const errors = [];
-  for (let i = 0; i < raw.length; i++) {
-    const slot = raw[i];
-    const id = slice[i];
-    const url = playerUrlForId(id);
-    if (!slot.ok) {
-      errors.push({ id, url, message: slot.error?.message || String(slot.error) });
-      continue;
+    const nextPending = [];
+    for (let i = 0; i < raw.length; i++) {
+      const id = pending[i];
+      const slot = raw[i];
+      const sec = ((Date.now() - t0) / 1000).toFixed(1);
+
+      if (slot.ok) {
+        playersById.set(id, slot.value.row);
+        const n = playersById.size;
+        const line = `  [${n}/${slice.length}] ${slot.value.row.name} (${sec}s)`;
+        if (n === 1 || n % logEvery === 0 || n === slice.length) {
+          flushLine(line);
+        }
+        continue;
+      }
+
+      const err = slot.error;
+      if (isTerminalScrapeError(err)) {
+        const url = playerUrlForId(id);
+        console.error(`\nPermanent failure for ${id} (${url}): ${err?.message || err}`);
+        console.error('Fix or remove this id from discovery; exiting without writing output.');
+        process.exit(1);
+      }
+
+      attemptSeq++;
+      flushLine(
+        `  [retry] ${id}: ${err?.message || err} — not counted toward ${slice.length} (${sec}s, attempt ${attemptSeq})`
+      );
+      nextPending.push(id);
     }
-    players.push(slot.value.row);
+
+    pending = nextPending;
+    if (pending.length > 0 && roundPauseMs > 0) {
+      await new Promise((r) => setTimeout(r, roundPauseMs));
+    }
   }
+
+  const players = slice.map((id) => {
+    const row = playersById.get(id);
+    if (!row) throw new Error(`Internal error: missing row for ${id}`);
+    return row;
+  });
 
   const elapsedMs = Math.max(1, Date.now() - t0);
   log(
@@ -115,9 +150,12 @@ async function scrape() {
   );
 
   await mkdir(dirname(outPath), { recursive: true });
-  await writeFile(outPath, JSON.stringify({ players, errors }, null, 2), 'utf8');
-  log(`\nWrote ${players.length} players to ${outPath}`);
-  if (errors.length) log(`Errors: ${errors.length} (see "errors" in JSON).`);
+  await writeFile(
+    outPath,
+    JSON.stringify({ players, errors: [] }, null, 2),
+    'utf8'
+  );
+  log(`\nWrote ${players.length} players to ${outPath} (all ${slice.length} scraped; none skipped).`);
 }
 
 async function ingest() {
@@ -130,8 +168,15 @@ async function ingest() {
   }
 
   const raw = await import('fs/promises').then((fs) => fs.readFile(path, 'utf8'));
-  const { players } = JSON.parse(raw);
+  const data = JSON.parse(raw);
+  const { players } = data;
   if (!Array.isArray(players)) throw new Error('Invalid JSON: expected { players: [] }');
+  if (Array.isArray(data.errors) && data.errors.length > 0) {
+    console.error(
+      `Refusing ingest: ${data.errors.length} scrape error(s) in JSON. Re-run scrape until errors is empty.`
+    );
+    process.exit(1);
+  }
 
   const chunkSize = Math.max(
     1,
