@@ -55,13 +55,22 @@ async function scrape() {
     ? Math.max(1, Math.min(12, parseInt(concArg, 10)))
     : playerConcurrency();
   log(`Fetching player pages with concurrency=${conc} (set CONCURRENCY or --concurrency).`);
+  log(
+    `Downloading ${slice.length} player pages — logs every 20 completions (this phase can take many minutes).`
+  );
 
+  let done = 0;
   const t0 = Date.now();
   const raw = await poolMap(slice, conc, async (id) => {
     const url = playerUrlForId(id);
     const html = await fetchText(url);
     const parsed = parsePlayerHtml(html, url);
     const row = toHoopCentralPlayer(parsed, id);
+    done++;
+    if (done === 1 || done % 20 === 0 || done === slice.length) {
+      const sec = ((Date.now() - t0) / 1000).toFixed(0);
+      log(`  [${done}/${slice.length}] ${row.name} (${sec}s)`);
+    }
     return { id, url, row };
   });
 
@@ -77,9 +86,6 @@ async function scrape() {
       continue;
     }
     players.push(slot.value.row);
-    if ((i + 1) % 50 === 0 || i + 1 === slice.length) {
-      log(`  [${i + 1}/${slice.length}] ${slot.value.row.name}`);
-    }
   }
 
   const elapsedMs = Math.max(1, Date.now() - t0);
