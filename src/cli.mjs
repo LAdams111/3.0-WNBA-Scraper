@@ -81,7 +81,7 @@ async function scrape() {
 
   const roundPauseMs = Math.max(
     0,
-    parseInt(process.env.SCRAPER_ROUND_PAUSE_MS || '1500', 10) || 0
+    parseInt(process.env.SCRAPER_ROUND_PAUSE_MS || '400', 10) || 0
   );
   const heartbeatMs = Math.max(
     3000,
@@ -107,8 +107,9 @@ async function scrape() {
     const wave = { started: 0, finished: 0 };
     const hb = setInterval(() => {
       const elapsed = Math.round((Date.now() - t0) / 1000);
+      const inFlight = wave.started - wave.finished;
       flushLine(
-        `  …heartbeat ${elapsed}s: round ${round} batch ${wave.finished}/${pending.length} pages done (${wave.started} started, concurrency ${conc})`
+        `  …heartbeat ${elapsed}s: round ${round} ${wave.finished}/${pending.length} batch slots finished, ${inFlight} in flight (started ${wave.started}, concurrency ${conc})`
       );
     }, heartbeatMs);
 

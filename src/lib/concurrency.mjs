@@ -10,11 +10,11 @@ function intEnv(name, min, max, fallback) {
 
 /**
  * Parallel BR page workers (1–48).
- * Default ≈ 4 × number of egress lanes (direct + each HTTP proxy in BR_PROXY_URLS), capped at 48.
+ * Default ≈ 8 × egress lanes (direct + each HTTP proxy in BR_PROXY_URLS), capped at 48.
  */
 export function playerConcurrency() {
   const lanes = Math.max(1, getBrLaneCount());
-  const mult = intEnv('CONCURRENCY_PER_PROXY', 1, 12, 4);
+  const mult = intEnv('CONCURRENCY_PER_PROXY', 1, 16, 8);
   const suggest = Math.min(48, Math.max(2, lanes * mult));
   const fromEnv = process.env.CONCURRENCY;
   if (fromEnv != null && fromEnv !== '') {

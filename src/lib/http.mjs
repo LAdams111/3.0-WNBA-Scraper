@@ -90,15 +90,18 @@ function pickBrLaneIndex() {
 }
 
 /** Fixed gap when BR_ADAPTIVE=0. */
-const brGapFixedMs = intEnv('BR_MIN_INTERVAL_MS', 200, 15_000, 750);
+const brGapFixedMs = intEnv('BR_MIN_INTERVAL_MS', 150, 15_000, 520);
 
 const brAdaptive = process.env.BR_ADAPTIVE !== '0';
-const gapFloor = intEnv('BR_GAP_FLOOR_MS', 120, 5000, 260);
-const gapCeiling = intEnv('BR_GAP_CEILING_MS', gapFloor, 30_000, 2200);
-const gapInitial = intEnv('BR_MIN_INTERVAL_MS', gapFloor, gapCeiling, 520);
-const shrinkEveryOk = intEnv('BR_ADAPTIVE_OK_STREAK', 1, 80, 10);
-const shrinkMs = intEnv('BR_ADAPTIVE_SHRINK_MS', 5, 250, 40);
-const widen429Factor = intEnv('BR_ADAPTIVE_429_MULT', 110, 250, 135) / 100;
+const gapFloor = intEnv('BR_GAP_FLOOR_MS', 100, 5000, 200);
+const gapCeiling = intEnv('BR_GAP_CEILING_MS', gapFloor, 30_000, 1800);
+const gapInitial = intEnv('BR_MIN_INTERVAL_MS', gapFloor, gapCeiling, 380);
+const shrinkEveryOk = intEnv('BR_ADAPTIVE_OK_STREAK', 1, 80, 6);
+const shrinkMs = intEnv('BR_ADAPTIVE_SHRINK_MS', 5, 300, 55);
+const widen429Factor = intEnv('BR_ADAPTIVE_429_MULT', 110, 250, 128) / 100;
+
+const laneCooldownCap = intEnv('BR_LANE_COOLDOWN_CAP_MS', 5000, 120_000, 40_000);
+const laneCooldownBase = intEnv('BR_LANE_COOLDOWN_BASE_MS', 800, 15_000, 2800);
 
 function retryAfterMs(res) {
   const h = res.headers?.get?.('retry-after');
@@ -126,10 +129,13 @@ function createBrLane() {
 
   function noteBr429(res) {
     const fromHeader = retryAfterMs(res);
-    const exp = Math.min(120_000, 10_000 * 2 ** Math.min(br429Streak, 5));
+    const exp = Math.min(
+      laneCooldownCap,
+      laneCooldownBase * 2 ** Math.min(br429Streak, 6)
+    );
     const base = fromHeader ?? exp;
     br429Streak = Math.min(br429Streak + 1, 8);
-    const until = Date.now() + base + Math.random() * 1500;
+    const until = Date.now() + base + Math.random() * 700;
     brCooldownUntil = Math.max(brCooldownUntil, until);
     brNextSlot = Math.max(brNextSlot, brCooldownUntil);
 
@@ -137,7 +143,7 @@ function createBrLane() {
       okStreakForShrink = 0;
       const next = Math.ceil(currentBrGapMs() * widen429Factor + 60);
       adaptiveGapMs = Math.min(gapCeiling, Math.max(gapFloor, next));
-      brNextSlot = Math.max(brNextSlot, Date.now() + Math.min(2000, adaptiveGapMs));
+      brNextSlot = Math.max(brNextSlot, Date.now() + Math.min(900, adaptiveGapMs));
     }
   }
 
@@ -187,7 +193,10 @@ const brFetchHeaders = {
   'Accept-Encoding': 'gzip, deflate, br',
 };
 
-export async function fetchText(url, { retries = 5 } = {}) {
+const br429FetchBackoffBase = intEnv('BR_FETCH_429_BACKOFF_BASE_MS', 0, 8000, 450);
+const br429FetchBackoffStep = intEnv('BR_FETCH_429_BACKOFF_STEP_MS', 0, 6000, 600);
+
+export async function fetchText(url, { retries = 4 } = {}) {
   const isBr = isBasketballReference(url);
   const laneIdx = isBr ? pickBrLaneIndex() : 0;
   const lane = isBr ? brLanes[laneIdx] : null;
@@ -211,7 +220,9 @@ export async function fetchText(url, { retries = 5 } = {}) {
         if (res.status === 429 || res.status === 503 || res.status === 502) {
           if (lane) lane.noteBr429(res);
           lastErr = new Error(`HTTP ${res.status} for ${url} (attempt ${i + 1}/${retries + 1})`);
-          const backoff = 2000 + 2500 * i + (isBr ? 3000 : 0);
+          const backoff = isBr
+            ? br429FetchBackoffBase + br429FetchBackoffStep * i
+            : 1200 + 1400 * i;
           await delay(backoff);
           continue;
         }
