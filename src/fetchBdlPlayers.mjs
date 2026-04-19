@@ -1,4 +1,5 @@
 import { pooledFetch } from './lib/http.mjs';
+import { fetchGeneralBaseByPlayerIds, inferBdlSeasonYear } from './fetchBdlSeasonStats.mjs';
 import { toHoopCentralFromBdl } from './mapBdlToIngest.mjs';
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -12,7 +13,7 @@ function intEnv(name, min, max, fallback) {
 }
 
 /**
- * Paginated GET against Ball Dont Lie NBA API (cursor-based).
+ * Paginated GET against Ball Dont Lie NBA API (cursor-based), then optional season averages.
  * @see https://docs.balldontlie.io/
  */
 export async function fetchAllBdlPlayers(log = console.log) {
@@ -27,6 +28,7 @@ export async function fetchAllBdlPlayers(log = console.log) {
   const perPage = intEnv('BDL_PER_PAGE', 1, 100, 100);
   const betweenMs = intEnv('BDL_REQUEST_DELAY_MS', 0, 120_000, 2100);
   const maxPages = intEnv('BDL_MAX_PAGES', 1, 50_000, 10_000);
+  const fetchStats = process.env.BDL_FETCH_SEASON_STATS !== '0';
 
   const rows = [];
   let cursor;
@@ -80,5 +82,13 @@ export async function fetchAllBdlPlayers(log = console.log) {
     if (betweenMs > 0) await delay(betweenMs);
   }
 
-  return rows.map(toHoopCentralFromBdl);
+  let avgById = new Map();
+  if (fetchStats && rows.length) {
+    const season = inferBdlSeasonYear();
+    log(`Fetching season ${season} general/base averages for ${rows.length} players…`);
+    const ids = rows.map((r) => r.id).filter((id) => id != null);
+    avgById = await fetchGeneralBaseByPlayerIds(apiKey, base, season, ids, log);
+  }
+
+  return rows.map((p) => toHoopCentralFromBdl(p, avgById.get(Number(p.id)) || null));
 }

@@ -24,14 +24,63 @@ function buildBdlBio(p) {
   return lines.join('\n');
 }
 
+function rnd(n) {
+  if (n == null || Number.isNaN(Number(n))) return undefined;
+  return Math.round(Number(n) * 10) / 10;
+}
+
+function num(n) {
+  if (n == null || Number.isNaN(Number(n))) return undefined;
+  return Math.round(Number(n));
+}
+
 /**
- * Map a Ball Dont Lie `GET /v1/players` row to Hoop Central ingest shape.
- * Season game stats are omitted unless you extend fetch with season_averages.
+ * @param {object} p - row from GET /v1/players
+ * @param {object|null} avg - row from GET /v1/season_averages/general … (has .season, .stats, optional .player)
  */
-export function toHoopCentralFromBdl(p) {
+export function toHoopCentralFromBdl(p, avg = null) {
   const name = [p.first_name, p.last_name].filter(Boolean).join(' ').trim() || `Player ${p.id}`;
   const team = p.team?.full_name || 'Free Agent';
   const seasonYear = new Date().getUTCFullYear();
+  const s = avg?.stats || {};
+  const seasonNum = avg?.season;
+  const seasonLabel =
+    seasonNum != null && Number.isFinite(Number(seasonNum)) ? `${seasonNum} NBA` : `${seasonYear} NBA`;
+
+  const teamForHistory = p.team?.full_name || 'Unknown';
+
+  const fgPctPct =
+    s.fg_pct != null
+      ? Number(s.fg_pct) <= 1
+        ? rnd(Number(s.fg_pct) * 100)
+        : rnd(s.fg_pct)
+      : undefined;
+
+  const seasonHistory =
+    avg && Object.keys(s).length
+      ? [
+          {
+            season: String(seasonNum ?? seasonYear),
+            league: 'NBA',
+            team: teamForHistory,
+            gamesPlayed: num(s.gp) ?? 0,
+            points: rnd(s.pts) ?? 0,
+            rebounds: rnd(s.reb) ?? 0,
+            assists: rnd(s.ast) ?? 0,
+            blocks: rnd(s.blk) ?? 0,
+            steals: rnd(s.stl) ?? 0,
+            fieldGoalPercentage: fgPctPct,
+          },
+        ]
+      : [];
+
+  const pts = rnd(s.pts);
+  const ast = rnd(s.ast);
+  const reb = rnd(s.reb);
+  const seasonTrends =
+    pts != null && ast != null && reb != null
+      ? { points: [pts], assists: [ast], rebounds: [reb] }
+      : { points: [], assists: [], rebounds: [] };
 
   return {
     externalId: `bdl-nba-${p.id}`,
@@ -47,9 +96,16 @@ export function toHoopCentralFromBdl(p) {
     weight: p.weight != null && p.weight !== '' ? String(p.weight) : undefined,
     profileViews: 0,
     stats: {
-      season: `${seasonYear} NBA`,
+      season: seasonLabel,
+      gamesPlayed: num(s.gp),
+      pointsPerGame: rnd(s.pts),
+      reboundsPerGame: rnd(s.reb),
+      assistsPerGame: rnd(s.ast),
+      fieldGoalPercentage: fgPctPct,
+      stealsPerGame: rnd(s.stl),
+      blocksPerGame: rnd(s.blk),
     },
-    seasonHistory: [],
-    seasonTrends: { points: [], assists: [], rebounds: [] },
+    seasonHistory,
+    seasonTrends,
   };
 }
