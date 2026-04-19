@@ -1,3 +1,4 @@
+import { getBdlApiKey, missingBdlApiKeyMessage } from './lib/bdlEnv.mjs';
 import { pooledFetch } from './lib/http.mjs';
 import { fetchGeneralBaseByPlayerIds, inferBdlSeasonYear } from './fetchBdlSeasonStats.mjs';
 import { toHoopCentralFromBdl } from './mapBdlToIngest.mjs';
@@ -17,9 +18,9 @@ function intEnv(name, min, max, fallback) {
  * @see https://docs.balldontlie.io/
  */
 export async function fetchAllBdlPlayers(log = console.log) {
-  const apiKey = process.env.BALLDONTLIE_API_KEY;
+  const apiKey = getBdlApiKey();
   if (!apiKey) {
-    throw new Error('Set BALLDONTLIE_API_KEY (see .env.example).');
+    throw new Error(missingBdlApiKeyMessage());
   }
 
   const base = (process.env.BALLDONTLIE_BASE_URL || 'https://api.balldontlie.io/v1').replace(/\/$/, '');
