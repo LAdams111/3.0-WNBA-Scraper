@@ -28,14 +28,28 @@ async function scrape() {
       ? limitFromEnv
       : null;
 
-  log('Fetching NBA players from Ball Dont Lie (no Basketball Reference).');
+  log(
+    'Step 1/2: Ball Dont Lie — listing players, then season stats (can take many minutes). Nothing is POSTed to your site yet.'
+  );
   const players = await fetchAllBdlPlayers(log);
   const slice = Number.isFinite(maxPlayers) ? players.slice(0, maxPlayers) : players;
   if (Number.isFinite(maxPlayers)) log(`Applying limit: ${slice.length} of ${players.length} players.`);
 
   await mkdir(dirname(outPath), { recursive: true });
   await writeFile(outPath, JSON.stringify({ players: slice, errors: [] }, null, 2), 'utf8');
-  log(`\nWrote ${slice.length} players to ${outPath}`);
+  log(`\nStep 1 complete: wrote ${slice.length} players to ${outPath}`);
+  log(
+    'If you ran npm start, Step 2 (ingest to Mongo via Hoop Central) runs next — watch for "Ingesting …" below.'
+  );
+}
+
+function ingestTargetLabel(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    return '(invalid HOOP_CENTRAL_INGEST_URL)';
+  }
 }
 
 async function ingest() {
@@ -46,6 +60,9 @@ async function ingest() {
     console.error('Set HOOP_CENTRAL_INGEST_URL and INGEST_API_KEY (see .env.example).');
     process.exit(1);
   }
+
+  console.log(`\nStep 2/2: Ingest → ${ingestTargetLabel(url)}`);
+  console.log(`Reading ${path}`);
 
   const raw = await import('fs/promises').then((fs) => fs.readFile(path, 'utf8'));
   const data = JSON.parse(raw);
