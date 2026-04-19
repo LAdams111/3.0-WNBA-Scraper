@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 
 import { discoverAllPlayerIds, playerUrlForId } from './discoverPlayers.mjs';
 import { playerConcurrency } from './lib/concurrency.mjs';
-import { fetchText, pooledFetch } from './lib/http.mjs';
+import { fetchText, getBrLaneCount, pooledFetch } from './lib/http.mjs';
 import { poolMap } from './lib/pool.mjs';
 import { parsePlayerHtml } from './parsePlayerPage.mjs';
 import { toHoopCentralPlayer } from './mapToIngest.mjs';
@@ -52,13 +52,16 @@ async function scrape() {
 
   const ids = await discoverAllPlayerIds(log);
   log(`Discovered ${ids.length} player pages.`);
+  log(
+    `BR egress lanes: ${getBrLaneCount()} — set BR_PROXY_URLS (comma-separated HTTP proxies) to add parallel IPs; ingest still uses direct HTTP.`
+  );
 
   const slice = Number.isFinite(maxPlayers) ? ids.slice(0, maxPlayers) : ids;
   if (Number.isFinite(maxPlayers)) log(`Scraping first ${slice.length} players (limit).`);
 
   const concArg = argValue('--concurrency');
   const conc = concArg
-    ? Math.max(1, Math.min(16, parseInt(concArg, 10)))
+    ? Math.max(1, Math.min(48, parseInt(concArg, 10)))
     : playerConcurrency();
   const logEveryRaw = parseInt(process.env.SCRAPING_LOG_EVERY || '1', 10);
   const logEvery = Number.isFinite(logEveryRaw) && logEveryRaw > 0 ? Math.min(200, logEveryRaw) : 1;
@@ -249,7 +252,7 @@ if (cmd === 'scrape') await scrape();
 else if (cmd === 'ingest') await ingest();
 else {
   console.log(`Usage:
-  node src/cli.mjs scrape [--limit N] [--out path.json] [--concurrency 1-16] [--fast]
+  node src/cli.mjs scrape [--limit N] [--out path.json] [--concurrency 1-48] [--fast]
   node src/cli.mjs ingest [--file path.json]
 
   --fast  use FAST_DISCOVER=1-style short index (dev only; omitted on npm start)

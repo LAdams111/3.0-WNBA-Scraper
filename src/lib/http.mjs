@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { Agent, fetch as undiciFetch } from 'undici';
+import { Agent, fetch as undiciFetch, ProxyAgent } from 'undici';
 import { UA } from './constants.mjs';
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -12,10 +12,10 @@ function intEnv(name, min, max, fallback) {
   return Math.min(max, Math.max(min, n));
 }
 
-/** Shared pool: keep-alive to basketball-reference.com. */
 const poolConnections = intEnv('BR_CONNECTION_POOL', 8, 128, 40);
 
-const dispatcher = new Agent({
+/** Used for ingest and any non-BR fetch (never routed through BR proxies). */
+const directAgent = new Agent({
   keepAliveTimeout: 45_000,
   keepAliveMaxTimeout: 300_000,
   connections: poolConnections,
@@ -27,11 +27,66 @@ export function delayBetweenRequests() {
 }
 
 export async function pooledFetch(url, init = {}) {
-  return undiciFetch(url, { ...init, dispatcher });
+  return undiciFetch(url, { ...init, dispatcher: init.dispatcher ?? directAgent });
 }
 
 function isBasketballReference(url) {
   return typeof url === 'string' && url.includes('basketball-reference.com');
+}
+
+function parseBrProxyUrls() {
+  const parts = [process.env.BR_PROXY_URLS, process.env.BR_PROXY_URL]
+    .filter(Boolean)
+    .join(',')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return [...new Set(parts)];
+}
+
+const proxyUriList = parseBrProxyUrls();
+const includeDirectLane = process.env.BR_INCLUDE_DIRECT_LANE === '1';
+
+/** @type {{ label: string, dispatcher: import('undici').Dispatcher }[]} */
+const brDispatchers = [];
+
+if (proxyUriList.length === 0) {
+  brDispatchers.push({ label: 'direct', dispatcher: directAgent });
+} else {
+  if (includeDirectLane) {
+    brDispatchers.push({ label: 'direct', dispatcher: directAgent });
+  }
+  for (const uri of proxyUriList) {
+    if (/^socks\d*:/i.test(uri)) {
+      console.error(`SOCKS proxies are not supported (use HTTP or HTTPS proxy): ${uri}`);
+      process.exit(1);
+    }
+    try {
+      new URL(uri);
+    } catch (e) {
+      console.error(`Invalid BR proxy URL (check BR_PROXY_URLS): ${uri}`);
+      console.error(e?.message || e);
+      process.exit(1);
+    }
+    try {
+      brDispatchers.push({ label: 'proxy', dispatcher: new ProxyAgent(uri) });
+    } catch (e) {
+      console.error(`Could not create proxy client for: ${uri}`);
+      console.error(e?.message || e);
+      process.exit(1);
+    }
+  }
+}
+
+let pickSeq = 0;
+
+/** How many independent BR egress lanes (direct and/or each proxy). */
+export function getBrLaneCount() {
+  return brDispatchers.length;
+}
+
+function pickBrLaneIndex() {
+  return pickSeq++ % brDispatchers.length;
 }
 
 /** Fixed gap when BR_ADAPTIVE=0. */
@@ -45,19 +100,6 @@ const shrinkEveryOk = intEnv('BR_ADAPTIVE_OK_STREAK', 1, 80, 10);
 const shrinkMs = intEnv('BR_ADAPTIVE_SHRINK_MS', 5, 250, 40);
 const widen429Factor = intEnv('BR_ADAPTIVE_429_MULT', 110, 250, 135) / 100;
 
-let adaptiveGapMs = gapInitial;
-let okStreakForShrink = 0;
-
-let brGate = Promise.resolve();
-let brNextSlot = 0;
-let brCooldownUntil = 0;
-let br429Streak = 0;
-
-function currentBrGapMs() {
-  if (!brAdaptive) return brGapFixedMs;
-  return Math.min(gapCeiling, Math.max(gapFloor, adaptiveGapMs));
-}
-
 function retryAfterMs(res) {
   const h = res.headers?.get?.('retry-after');
   if (!h) return null;
@@ -69,60 +111,74 @@ function retryAfterMs(res) {
   return null;
 }
 
-function noteBr429(res) {
-  const fromHeader = retryAfterMs(res);
-  const exp = Math.min(120_000, 10_000 * 2 ** Math.min(br429Streak, 5));
-  const base = fromHeader ?? exp;
-  br429Streak = Math.min(br429Streak + 1, 8);
-  const until = Date.now() + base + Math.random() * 1500;
-  brCooldownUntil = Math.max(brCooldownUntil, until);
-  brNextSlot = Math.max(brNextSlot, brCooldownUntil);
+function createBrLane() {
+  let brGate = Promise.resolve();
+  let brNextSlot = 0;
+  let brCooldownUntil = 0;
+  let br429Streak = 0;
+  let adaptiveGapMs = gapInitial;
+  let okStreakForShrink = 0;
 
-  if (brAdaptive) {
-    okStreakForShrink = 0;
-    const next = Math.ceil(currentBrGapMs() * widen429Factor + 60);
-    adaptiveGapMs = Math.min(gapCeiling, Math.max(gapFloor, next));
-    brNextSlot = Math.max(brNextSlot, Date.now() + Math.min(2000, adaptiveGapMs));
+  function currentBrGapMs() {
+    if (!brAdaptive) return brGapFixedMs;
+    return Math.min(gapCeiling, Math.max(gapFloor, adaptiveGapMs));
   }
-}
 
-function noteBrOk() {
-  br429Streak = Math.max(0, br429Streak - 1);
-  if (!brAdaptive) return;
-  okStreakForShrink++;
-  if (okStreakForShrink >= shrinkEveryOk) {
-    okStreakForShrink = 0;
-    adaptiveGapMs = Math.max(gapFloor, adaptiveGapMs - shrinkMs);
-  }
-}
+  function noteBr429(res) {
+    const fromHeader = retryAfterMs(res);
+    const exp = Math.min(120_000, 10_000 * 2 ** Math.min(br429Streak, 5));
+    const base = fromHeader ?? exp;
+    br429Streak = Math.min(br429Streak + 1, 8);
+    const until = Date.now() + base + Math.random() * 1500;
+    brCooldownUntil = Math.max(brCooldownUntil, until);
+    brNextSlot = Math.max(brNextSlot, brCooldownUntil);
 
-/**
- * Serialize slot reservation so concurrent workers cannot burst past BR rate limits.
- * Gap is adaptive (when enabled): tightens after OK streaks, widens on 429.
- */
-async function awaitBrSpacing() {
-  const prev = brGate;
-  let release;
-  brGate = new Promise((r) => {
-    release = r;
-  });
-  await prev;
-  try {
-    for (;;) {
-      const now = Date.now();
-      if (now >= brCooldownUntil) break;
-      await delay(Math.min(500, Math.max(50, brCooldownUntil - now)));
+    if (brAdaptive) {
+      okStreakForShrink = 0;
+      const next = Math.ceil(currentBrGapMs() * widen429Factor + 60);
+      adaptiveGapMs = Math.min(gapCeiling, Math.max(gapFloor, next));
+      brNextSlot = Math.max(brNextSlot, Date.now() + Math.min(2000, adaptiveGapMs));
     }
-    const now = Date.now();
-    const startAt = Math.max(now, brNextSlot);
-    const gap = currentBrGapMs();
-    brNextSlot = startAt + gap;
-    const wait = startAt - now;
-    if (wait > 0) await delay(wait);
-  } finally {
-    release();
   }
+
+  function noteBrOk() {
+    br429Streak = Math.max(0, br429Streak - 1);
+    if (!brAdaptive) return;
+    okStreakForShrink++;
+    if (okStreakForShrink >= shrinkEveryOk) {
+      okStreakForShrink = 0;
+      adaptiveGapMs = Math.max(gapFloor, adaptiveGapMs - shrinkMs);
+    }
+  }
+
+  async function awaitSpacing() {
+    const prev = brGate;
+    let release;
+    brGate = new Promise((r) => {
+      release = r;
+    });
+    await prev;
+    try {
+      for (;;) {
+        const now = Date.now();
+        if (now >= brCooldownUntil) break;
+        await delay(Math.min(500, Math.max(50, brCooldownUntil - now)));
+      }
+      const now = Date.now();
+      const startAt = Math.max(now, brNextSlot);
+      const gap = currentBrGapMs();
+      brNextSlot = startAt + gap;
+      const wait = startAt - now;
+      if (wait > 0) await delay(wait);
+    } finally {
+      release();
+    }
+  }
+
+  return { awaitSpacing, noteBr429, noteBrOk };
 }
+
+const brLanes = brDispatchers.map(() => createBrLane());
 
 const brFetchHeaders = {
   'User-Agent': UA,
@@ -132,10 +188,15 @@ const brFetchHeaders = {
 };
 
 export async function fetchText(url, { retries = 5 } = {}) {
+  const isBr = isBasketballReference(url);
+  const laneIdx = isBr ? pickBrLaneIndex() : 0;
+  const lane = isBr ? brLanes[laneIdx] : null;
+  const dispatcher = isBr ? brDispatchers[laneIdx].dispatcher : directAgent;
+
   let lastErr;
   for (let i = 0; i <= retries; i++) {
-    if (isBasketballReference(url)) {
-      await awaitBrSpacing();
+    if (lane) {
+      await lane.awaitSpacing();
     }
     try {
       const ctrl = new AbortController();
@@ -148,15 +209,15 @@ export async function fetchText(url, { retries = 5 } = {}) {
           headers: brFetchHeaders,
         });
         if (res.status === 429 || res.status === 503 || res.status === 502) {
-          if (isBasketballReference(url)) noteBr429(res);
+          if (lane) lane.noteBr429(res);
           lastErr = new Error(`HTTP ${res.status} for ${url} (attempt ${i + 1}/${retries + 1})`);
-          const backoff = 2000 + 2500 * i + (isBasketballReference(url) ? 3000 : 0);
+          const backoff = 2000 + 2500 * i + (isBr ? 3000 : 0);
           await delay(backoff);
           continue;
         }
         if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
         const text = await res.text();
-        if (isBasketballReference(url)) noteBrOk();
+        if (lane) lane.noteBrOk();
         return text;
       } finally {
         clearTimeout(t);
